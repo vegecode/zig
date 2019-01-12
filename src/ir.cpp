@@ -20383,10 +20383,47 @@ static IrInstruction *ir_analyze_instruction_int_to_ptr(IrAnalyze *ira, IrInstru
         if (!val)
             return ira->codegen->invalid_instruction;
 
+        uint64_t addr_num = bigint_as_unsigned(&val->data.x_bigint);
+        ZigType* child_type_p = dest_type->data.pointer.child_type;
+        if ((child_type_p->id == ZigTypeIdStruct &&
+             child_type_p->data.structure.layout == ContainerLayoutPacked) ||
+            (child_type_p->id == ZigTypeIdEnum &&
+             child_type_p->data.enumeration.layout == ContainerLayoutPacked)) {
+            if (!(err = type_resolve(ira->codegen, child_type_p, ResolveStatusSizeKnown))) {
+                uint64_t dest_type_size_bytes = type_size(ira->codegen, child_type_p);
+                uint32_t addr_alignment = 16;
+                uint32_t dest_type_alignment = 1;
+
+                if (addr_num & (0x10 - 1)) {
+                    addr_alignment = 8;
+                }
+                if (addr_num & (0x08 - 1)) {
+                    addr_alignment = 4;
+                }
+                if (addr_num & (0x04 - 1)) {
+                    addr_alignment = 2;
+                }
+                if (addr_num & (0x02 - 1)) {
+                    addr_alignment = 1;
+                }
+
+                if ((dest_type_size_bytes & 1) || (dest_type_size_bytes > 16)) {
+                    dest_type_alignment = 1;
+                } else {
+                    dest_type_alignment = dest_type_size_bytes;
+                }
+
+                if (dest_type->data.pointer.explicit_alignment == 0) {
+                    // alignment not specified by user
+                    dest_type->data.pointer.explicit_alignment = min(addr_alignment, dest_type_alignment);
+                }
+            }
+        }
         IrInstruction *result = ir_const(ira, &instruction->base, dest_type);
         result->value.data.x_ptr.special = ConstPtrSpecialHardCodedAddr;
         result->value.data.x_ptr.mut = ConstPtrMutRuntimeVar;
-        result->value.data.x_ptr.data.hard_coded_addr.addr = bigint_as_unsigned(&val->data.x_bigint);
+        result->value.data.x_ptr.data.hard_coded_addr.addr = addr_num;
+
         return result;
     }
 
